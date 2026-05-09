@@ -9,6 +9,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import '../services/background_service.dart';
 import '../engine/safepulse_engine.dart';
 import '../services/api_service.dart';
+import '../services/location_service.dart';
 import '../../../core/enums.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -287,10 +288,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 padding: const EdgeInsets.symmetric(vertical: 20),
               ),
               onPressed: () async {
+                final locationService = LocationService();
+                final position = await locationService.getCurrentPosition();
+                
                 final apiService = ApiService();
                 await apiService.sendSOS(
-                  17.385,
-                  78.486,
+                  position?.latitude ?? 0.0,
+                  position?.longitude ?? 0.0,
                   "HIGH",
                 );
               },

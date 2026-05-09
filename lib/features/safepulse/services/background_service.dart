@@ -8,11 +8,11 @@ import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/widgets.dart';
 import '../engine/safepulse_engine.dart';
-import '../../../core/enums.dart';
-import 'dart:math';
 
 @pragma('vm:entry-point')
-void notificationTapBackground(NotificationResponse notificationResponse) async {
+void notificationTapBackground(
+  NotificationResponse notificationResponse,
+) async {
   if (notificationResponse.actionId == 'hide_battery_alert') {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('hide_battery_alert', true);
@@ -33,9 +33,11 @@ void onStart(ServiceInstance service) async {
   final engine = SafePulseEngine();
   await engine.start();
 
-  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
 
-  const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
+  const AndroidInitializationSettings initializationSettingsAndroid =
+      AndroidInitializationSettings('@mipmap/ic_launcher');
   const InitializationSettings initializationSettings = InitializationSettings(
     android: initializationSettingsAndroid,
   );
@@ -47,40 +49,23 @@ void onStart(ServiceInstance service) async {
 
   final Battery battery = Battery();
 
-  Timer? _statusTimer;
-  Timer? _watchdogTimer;
-  Timer? _retryTimer;
-  bool _retryLoopRunning = true;
-  String _lastNotificationText = "";
-
-  void scheduleRetry() {
-    if (!_retryLoopRunning) return;
-    final delay = 60 + Random().nextInt(15);
-    _retryTimer = Timer(Duration(seconds: delay), () async {
-      await engine.apiService.retryQueuedRequests();
-      scheduleRetry();
-    });
-  }
-
-  scheduleRetry();
+  Timer? statusTimer;
+  Timer? watchdogTimer;
+  String lastNotificationText = "";
 
   service.on('stopService').listen((event) async {
-    _statusTimer?.cancel();
-    _watchdogTimer?.cancel();
-    _retryLoopRunning = false;
-    _retryTimer?.cancel();
+    statusTimer?.cancel();
+    watchdogTimer?.cancel();
     await engine.stop();
     await flutterLocalNotificationsPlugin.cancelAll();
     service.stopSelf();
   });
 
-  _statusTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
+  statusTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
     final prefs = await SharedPreferences.getInstance();
     if (!(prefs.getBool("isMonitoring") ?? false)) {
-      _statusTimer?.cancel();
-      _watchdogTimer?.cancel();
-      _retryLoopRunning = false;
-      _retryTimer?.cancel();
+      statusTimer?.cancel();
+      watchdogTimer?.cancel();
       await engine.stop();
       await flutterLocalNotificationsPlugin.cancelAll();
       service.stopSelf();
@@ -88,7 +73,7 @@ void onStart(ServiceInstance service) async {
     }
   });
 
-  _watchdogTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
+  watchdogTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
     final prefs = await SharedPreferences.getInstance();
     if (!(prefs.getBool("isMonitoring") ?? false)) {
       timer.cancel();
@@ -97,7 +82,8 @@ void onStart(ServiceInstance service) async {
     if (service is AndroidServiceInstance) {
       if (await service.isForegroundService()) {
         String notificationTitle = '🛡️ SafePulse AI Active';
-        String notificationBody = 'Monitoring sensors and location autonomously.';
+        String notificationBody =
+            'Monitoring sensors and location autonomously.';
         Importance importance = Importance.low;
         Priority priority = Priority.low;
 
@@ -125,8 +111,8 @@ void onStart(ServiceInstance service) async {
         }
 
         final currentText = "$notificationTitle:$notificationBody";
-        if (currentText != _lastNotificationText) {
-          _lastNotificationText = currentText;
+        if (currentText != lastNotificationText) {
+          lastNotificationText = currentText;
           flutterLocalNotificationsPlugin.show(
             888,
             notificationTitle,
@@ -149,7 +135,7 @@ void onStart(ServiceInstance service) async {
     try {
       isLocationOn = await Geolocator.isLocationServiceEnabled();
     } catch (e) {}
-    
+
     await prefs.setBool('sys_isLocationOn', isLocationOn);
 
     if (!isLocationOn) {
@@ -224,14 +210,19 @@ class BackgroundServiceHelper {
       importance: Importance.low,
     );
 
-    final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+    final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+        FlutterLocalNotificationsPlugin();
 
     await flutterLocalNotificationsPlugin
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
         ?.createNotificationChannel(channel);
 
     await flutterLocalNotificationsPlugin
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
         ?.createNotificationChannel(alertChannel);
 
     await service.configure(
@@ -244,7 +235,10 @@ class BackgroundServiceHelper {
         initialNotificationContent: 'Monitoring sensors...',
         foregroundServiceNotificationId: 888,
       ),
-      iosConfiguration: IosConfiguration(autoStart: false, onForeground: onStart),
+      iosConfiguration: IosConfiguration(
+        autoStart: false,
+        onForeground: onStart,
+      ),
     );
   }
 }

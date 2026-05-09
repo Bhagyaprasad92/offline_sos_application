@@ -1,10 +1,13 @@
 // lib/features/safepulse/services/sos_service.dart
+import 'dart:async';
 import 'package:telephony_fix/telephony.dart';
 import 'package:flutter_phone_direct_caller/flutter_phone_direct_caller.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'api_service.dart';
 
 class SosService {
   final Telephony telephony = Telephony.instance;
+  final ApiService _apiService = ApiService();
 
   final List<String> emergencyContacts = [
     "+919381363374",
@@ -18,6 +21,34 @@ class SosService {
   Function(String message)? onLog;
   Function()? onCallReturned;
   bool _isAwaitingCallReturn = false;
+
+  Future<void> triggerHybridSOS({
+    required double lat,
+    required double lng,
+    required bool hasLocation,
+    required int? locationAgeSec,
+    double speedMs = 0.0,
+  }) async {
+    // Fire online in background
+    unawaited(
+      _apiService.sendSOS(
+        lat,
+        lng,
+        "HIGH",
+        hasLocation: hasLocation,
+        locationAgeSec: locationAgeSec,
+      ),
+    );
+
+    // ALWAYS execute offline emergency actions
+    await triggerOfflineSOS(
+      lat,
+      lng,
+      hasLocation: hasLocation,
+      locationAgeSec: locationAgeSec,
+      speedMs: speedMs,
+    );
+  }
 
   Future<void> triggerOfflineSOS(
     double lat,

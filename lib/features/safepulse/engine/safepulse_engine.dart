@@ -11,7 +11,15 @@ import '../services/warning_service.dart';
 import '../../../core/enums.dart';
 
 enum EngineState { idle, monitoring, processingSos }
-enum EngineHealthState { active, recoveringSensors, recoveringAI, degraded, emergency }
+
+enum EngineHealthState {
+  active,
+  recoveringSensors,
+  recoveringAI,
+  degraded,
+  emergency,
+}
+
 enum EngineSeverity { normal, warning, critical }
 
 class SafePulseEngine {
@@ -33,13 +41,13 @@ class SafePulseEngine {
   final speedStream = StreamController<double>.broadcast();
   final distractionStream = StreamController<int>.broadcast();
   final stateStream = StreamController<EngineState>.broadcast();
-  
+
   // Custom event for police fallback UI
   final callReturnedStream = StreamController<void>.broadcast();
 
   bool _isRunning = false;
-  DateTime? _lastSosTime;
-  
+  DateTime? _lastEmergencyTrigger;
+
   bool sysLocationOn = true;
   bool sysBatterySaverOn = false;
 
@@ -53,18 +61,30 @@ class SafePulseEngine {
 
   bool _recoveringSensors = false;
   bool _recoveringAI = false;
-  bool _recoveringEngine = false;
-  
+  final bool _recoveringEngine = false;
+
   int _degradedRecoveryAttempts = 0;
   DateTime? _lastRecoveryTime;
-  
+
   EngineHealthState healthState = EngineHealthState.active;
   Timer? _watchdogTimer;
   bool _stopping = false;
 
-  bool get _sosLocked =>
-      _lastSosTime != null &&
-      DateTime.now().difference(_lastSosTime!) < const Duration(minutes: 1);
+  bool _canTriggerSOS() {
+    if (_lastEmergencyTrigger == null) {
+      _lastEmergencyTrigger = DateTime.now();
+      return true;
+    }
+
+    final diff = DateTime.now().difference(_lastEmergencyTrigger!);
+
+    if (diff.inSeconds < 30) {
+      return false;
+    }
+
+    _lastEmergencyTrigger = DateTime.now();
+    return true;
+  }
 
   EngineSeverity get severity {
     switch (healthState) {
@@ -97,9 +117,23 @@ class SafePulseEngine {
     // Bind loggers
     aiService.onLog = (msg) => log(msg, level: LogLevel.info);
     sensorService.onLog = (msg) => log(msg, level: LogLevel.info);
-    locationService.onLog = (msg) => log(msg, level: msg.contains("⚠️") || msg.contains("❌") ? LogLevel.warning : LogLevel.info);
+    locationService.onLog =
+        (msg) => log(
+          msg,
+          level:
+              msg.contains("⚠️") || msg.contains("❌")
+                  ? LogLevel.warning
+                  : LogLevel.info,
+        );
     warningService.onLog = (msg) => log(msg, level: LogLevel.warning);
-    sosService.onLog = (msg) => log(msg, level: msg.contains("FAILED") || msg.contains("⚠️") ? LogLevel.warning : LogLevel.info);
+    sosService.onLog =
+        (msg) => log(
+          msg,
+          level:
+              msg.contains("FAILED") || msg.contains("⚠️")
+                  ? LogLevel.warning
+                  : LogLevel.info,
+        );
 
     // Bind event streams
     locationService.onSpeedUpdate = (speedMs) {
@@ -145,16 +179,14 @@ class SafePulseEngine {
 
   void _updateState(EngineState state) {
     stateStream.add(state);
-    FlutterBackgroundService().invoke('state', {
-      'state': state.index,
-    });
+    FlutterBackgroundService().invoke('state', {'state': state.index});
   }
 
   Future<void> start() async {
     if (_isRunning) return;
     _isRunning = true;
     _stopping = false;
-    
+
     _updateState(EngineState.monitoring);
     healthState = EngineHealthState.active;
     log("🛡️ AI Dashcam STARTED in Background Isolate.");
@@ -167,7 +199,10 @@ class SafePulseEngine {
     locationService.startSpeedMonitoring();
 
     _watchdogTimer?.cancel();
-    _watchdogTimer = Timer.periodic(const Duration(seconds: 5), (_) => _healthCheck());
+    _watchdogTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _healthCheck(),
+    );
   }
 
   Future<void> _healthCheck() async {
@@ -176,15 +211,16 @@ class SafePulseEngine {
     }
 
     final now = DateTime.now();
-    
+
     // Calculate clamping & dynamic timeout
     final avgGapMs = sensorService.avgGapMs;
     final dynamicTimeoutSeconds = (avgGapMs * 10 / 1000).toInt();
     final timeout = dynamicTimeoutSeconds.clamp(5, 25);
-    
+
     final sensorDead = now.difference(_lastSensorEvent).inSeconds > timeout;
-    final aiStall = now.difference(_lastInferenceAttempt).inSeconds > 20 && 
-                    _lastInferenceAttempt.isAfter(_lastInferenceCompleted);
+    final aiStall =
+        now.difference(_lastInferenceAttempt).inSeconds > 20 &&
+        _lastInferenceAttempt.isAfter(_lastInferenceCompleted);
 
     _sensorHealthy = !sensorDead;
     _aiHealthy = !aiStall;
@@ -199,26 +235,32 @@ class SafePulseEngine {
     }
 
     if (avgGapMs > 200) {
-      log("Sensor cadence degraded: ${avgGapMs.toStringAsFixed(1)}ms gap", level: LogLevel.warning);
+      log(
+        "Sensor cadence degraded: ${avgGapMs.toStringAsFixed(1)}ms gap",
+        level: LogLevel.warning,
+      );
     }
 
     if (healthState == EngineHealthState.degraded) {
       // Self-healing attempt
       if (_degradedRecoveryAttempts < 5) {
         _degradedRecoveryAttempts++;
-        log("Degraded Mode: Attempting lightweight recovery ($_degradedRecoveryAttempts/5)");
-        _recoverSensors(); 
+        log(
+          "Degraded Mode: Attempting lightweight recovery ($_degradedRecoveryAttempts/5)",
+        );
+        _recoverSensors();
       }
       return;
     }
 
     // Cooldown check
-    if (_lastRecoveryTime != null && now.difference(_lastRecoveryTime!).inSeconds < 20) {
+    if (_lastRecoveryTime != null &&
+        now.difference(_lastRecoveryTime!).inSeconds < 20) {
       return;
     }
 
     _lastRecoveryTime = now;
-    
+
     if (sensorDead) {
       _recoverSensors();
     } else if (aiStall) {
@@ -228,7 +270,10 @@ class SafePulseEngine {
 
   Future<void> _recoverSensors() async {
     _recoveringSensors = true;
-    healthState = healthState == EngineHealthState.degraded ? EngineHealthState.degraded : EngineHealthState.recoveringSensors;
+    healthState =
+        healthState == EngineHealthState.degraded
+            ? EngineHealthState.degraded
+            : EngineHealthState.recoveringSensors;
     log("Watchdog: Restarting sensors...", level: LogLevel.warning);
     try {
       await sensorService.restart();
@@ -255,7 +300,10 @@ class SafePulseEngine {
       _degradedRecoveryAttempts++;
       if (_degradedRecoveryAttempts >= 3) {
         healthState = EngineHealthState.degraded;
-        log("Watchdog: Recovery limit exceeded. Entering Degraded Mode.", level: LogLevel.critical);
+        log(
+          "Watchdog: Recovery limit exceeded. Entering Degraded Mode.",
+          level: LogLevel.critical,
+        );
         // autonomous AI triggers are blocked in onRawData if degraded
       }
     }
@@ -265,10 +313,10 @@ class SafePulseEngine {
     if (_stopping || !_isRunning) return;
     _stopping = true;
     _isRunning = false;
-    
+
     _watchdogTimer?.cancel();
     _watchdogTimer = null;
-    
+
     _updateState(EngineState.idle);
     await sensorService.stop();
     locationService.stop();
@@ -276,8 +324,9 @@ class SafePulseEngine {
   }
 
   Future<void> _handleCrash() async {
-    if (_sosLocked) return;
-    _lastSosTime = DateTime.now();
+    if (!_canTriggerSOS()) {
+      return;
+    }
 
     try {
       log("🚀 SOS TRIGGERED AUTONOMOUSLY BY AI!", level: LogLevel.critical);
@@ -285,21 +334,26 @@ class SafePulseEngine {
 
       final position = await locationService.getCurrentPosition();
       bool hasLocation = position != null;
-      int? locationAgeSec = hasLocation && locationService.lastValidTime != null 
-          ? DateTime.now().difference(locationService.lastValidTime!).inSeconds 
-          : null;
+      int? locationAgeSec =
+          hasLocation && locationService.lastValidTime != null
+              ? DateTime.now()
+                  .difference(locationService.lastValidTime!)
+                  .inSeconds
+              : null;
 
       double lat = position?.latitude ?? 0.0;
       double lng = position?.longitude ?? 0.0;
 
-      // Try API first
-      log("Sending SOS to Server...", level: LogLevel.critical);
-      await apiService.sendSOS(lat, lng, "HIGH", hasLocation: hasLocation, locationAgeSec: locationAgeSec);
-
-      // Try Offline Fallback
-      log("Initiating Offline SOS...", level: LogLevel.critical);
+      // Use Hybrid SOS (Online first, then Fallback)
+      log("Initiating Hybrid SOS Protocol...", level: LogLevel.critical);
       double currentSpeed = locationService.currentSpeedMs ?? 0.0;
-      await sosService.triggerOfflineSOS(lat, lng, hasLocation: hasLocation, locationAgeSec: locationAgeSec, speedMs: currentSpeed);
+      await sosService.triggerHybridSOS(
+        lat: lat,
+        lng: lng,
+        hasLocation: hasLocation,
+        locationAgeSec: locationAgeSec,
+        speedMs: currentSpeed,
+      );
     } finally {
       _updateState(EngineState.idle);
     }
@@ -311,7 +365,7 @@ class SafePulseEngine {
     distractionStream.close();
     stateStream.close();
     callReturnedStream.close();
-    
+
     aiService.dispose();
     warningService.dispose();
   }
